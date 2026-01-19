@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Document Manager</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
+        .container { display: flex; height: 100vh; }
+        #sidebar { width: 260px; background: #f4f4f4; padding: 20px; box-shadow: 2px 0 5px rgba(0,0,0,0.1); overflow-y: auto; }
+        #sidebar h3, #sidebar h4 { margin-top: 0; }
+        #sidebar ul { list-style: none; padding: 0; margin: 0; }
+        #sidebar li { padding: 8px; margin-bottom: 5px; background: #fff; border-radius: 4px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+        #sidebar li:hover { background: #e0e0e0; }
+        #main { flex: 1; padding: 20px; overflow-y: auto; }
+        mark { background-color: yellow; }
+        input, button { margin: 5px 0; padding: 5px; border-radius: 4px; border: 1px solid #ccc; }
+        button { cursor: pointer; background-color: #4CAF50; color: white; border: none; }
+        button:hover { background-color: #45a049; }
+        .doc-name {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis; /* ... pentru nume lungi */
+    margin-right: 5px;
+}
+        .delete-btn { background-color: #f44336; padding: 2px 6px; font-size: 12px; }
+        .delete-btn:hover { background-color: #d32f2f; }
+        h3 { margin-top: 0; }
+        #results p { margin: 5px 0; cursor: pointer; color: #007bff; text-decoration: underline; }
+        #results p:hover { color: #0056b3; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div id="sidebar">
+        <h3>Documents</h3>
+        <ul id="docList"></ul>
+        <hr>
+        <h4>Upload</h4>
+        <input type="file" id="fileInput" accept=".pdf,.doc,.docx">
+        <button onclick="upload()">Upload</button>
+    </div>
+
+    <div id="main">
+        <div id="uploadedContent"></div>
+        <hr>
+        <h3>Search</h3>
+        <input type="text" id="term" placeholder="Enter search term">
+        <button onclick="search()">Search</button>
+        <div id="results"></div>
+        <hr>
+        <h3>Document Content</h3>
+        <div id="docContent"></div>
+    </div>
+</div>
+
+<script>
+let currentSearchTerm = "";
+
+// Load document list
+async function loadDocuments() {
+    const res = await fetch("/documents");
+    const data = await res.json();
+
+    let list = document.getElementById("docList");
+    list.innerHTML = "";
+    data.forEach(d => {
+        let li = document.createElement("li");
+
+        let nameSpan = document.createElement("span");
+        nameSpan.textContent = d.filename;
+        nameSpan.className = "doc-name";
+        nameSpan.onclick = () => loadDocument(d.id, currentSearchTerm);
+
+        let delBtn = document.createElement("button");
+        delBtn.textContent = "Delete";
+        delBtn.className = "delete-btn";
+        delBtn.onclick = (e) => {
+            e.stopPropagation();
+            deleteDocument(d.id);
+        };
+
+        li.appendChild(nameSpan);
+        li.appendChild(delBtn);
+        list.appendChild(li);
+    });
+}
+
+// Load document content with optional highlight
+async function loadDocument(id, highlightTerm) {
+    const res = await fetch("/documents/" + id);
+    let content = await res.text();
+
+    const docList = await fetch("/documents").then(r=>r.json());
+    const doc = docList.find(d => d.id === id);
+    const filename = doc ? doc.filename : "Document";
+
+    if(highlightTerm){
+        const regex = new RegExp(`(${highlightTerm})`, "gi");
+        content = content.replace(regex, "<mark>$1</mark>");
+    }
+
+    document.getElementById("docContent").innerHTML = `<h4>${filename}</h4><p>${content}</p>`;
+}
+
+// Delete document
+async function deleteDocument(id){
+    if(!confirm("Are you sure you want to delete this document?")) return;
+
+    try {
+        const res = await fetch("/documents/" + id, { method: "DELETE" });
+        if(!res.ok) throw new Error("Failed to delete document");
+
+        await loadDocuments();
+
+        document.getElementById("docContent").innerHTML = "";
+        document.getElementById("results").innerHTML = "";
+
+    } catch(e) {
+        alert("Error deleting document: " + e.message);
+    }
+}
+
+async function upload() {
+    let fileInput = document.getElementById("fileInput");
+    if(fileInput.files.length === 0) return;
+
+    let formData = new FormData();
+    formData.append("file", fileInput.files[0]);
+
+    const res = await fetch("/upload", { method: "POST", body: formData });
+    const data = await res.json();
+
+    if(data.error){
+        document.getElementById("uploadedContent").innerHTML = "<p style='color:red'>" + data.error + "</p>";
+        return;
+    }
+
+    document.getElementById("uploadedContent").innerHTML = "<h4>Uploaded: " + data.filename + "</h4>";
+    fileInput.value = "";
+
+    const maxTries = 10;
+    let tries = 0;
+
+    const checkDocument = async () => {
+        tries++;
+        const docs = await fetch("/documents").then(r=>r.json());
+        const found = docs.some(d => d.filename === data.filename);
+        if(found || tries >= maxTries){
+            loadDocuments();
+            return;
+        } else {
+            setTimeout(checkDocument, 500);
+        }
+    };
+    checkDocument();
+}
+
+// Search documents
+async function search() {
+    let term = document.getElementById("term").value;
+    currentSearchTerm = term;
+    if(!term) return;
+
+    const res = await fetch("/search?term=" + encodeURIComponent(term));
+    const data = await res.json();
+    let html = "";
+    data.forEach(item => {
+        html += `<p onclick='loadDocument("${item.id}", "${currentSearchTerm}")'>${item.highlight}</p><hr>`;
+    });
+    document.getElementById("results").innerHTML = html;
+}
+
+loadDocuments();
+</script>
+
+</body>
+</html>
